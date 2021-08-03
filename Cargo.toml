@@ -7,9 +7,12 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-std="^1.7.0"
 anyhow="^1.0.38"
 firebase-rs= { git = "https://github.com/dorfsmay/firebase-rs", branch = "implement-std-error" }
 chrono="^0.4.19"
 serde_json="^1.0"
 notify-rust = "^4.5.2"
+eventsource = "0.5.0"
+reqwest = "0.11.4"
 
