@@ -44,18 +44,18 @@ fn run_command_thread() {
         match io::stdin().read_line(&mut input) {
             Ok(_) => {
                 let trimmed = input.trim();
-                match trimmed {
-                    "" => continue,
-                    "q" => return,
-                    _ => {
-                        let command_tokens = trimmed.splitn(2, " ").collect::<Vec<&str>>();
-                        //println!("{}, {}", command_tokens[0], command_tokens[1]);
-                        let (command, arg) = (command_tokens[0], command_tokens[1]);
-                        match command {
-                            "s" => start_timer(arg.to_string()),
-                            _ => println!("invalid command"),
-                        }
-                    }
+                match &trimmed.split(" ").collect::<Vec<&str>>()[..] {
+                    &[command] => match command {
+                        "" => continue,
+                        "q" => return,
+                        _ => println!("invalid command"),
+                    },
+
+                    &[command, arg] => match command {
+                        "s" => start_timer(arg.to_string()),
+                        _ => println!("invalid command"),
+                    },
+                    _ => println!("invalid command X"),
                 }
             }
             Err(error) => eprintln!("error: {:?}", error),
