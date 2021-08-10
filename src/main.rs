@@ -45,13 +45,26 @@ fn run_command_thread() {
             Ok(_) => {
                 let trimmed = input.trim();
                 match trimmed {
-                    "q" => return, // std::process::exit(1),
-                    _ => println!("invalid command")
+                    "" => continue,
+                    "q" => return,
+                    _ => {
+                        let command_tokens = trimmed.splitn(2, " ").collect::<Vec<&str>>();
+                        //println!("{}, {}", command_tokens[0], command_tokens[1]);
+                        let (command, arg) = (command_tokens[0], command_tokens[1]);
+                        match command {
+                            "s" => start_timer(arg.to_string()),
+                            _ => println!("invalid command"),
+                        }
+                    }
                 }
             }
             Err(error) => eprintln!("error: {:?}", error),
         }
     }
+}
+
+fn start_timer(length: String) {
+    println!("starting timer for {} minutes", length)
 }
 
 fn run_event_thread() {
