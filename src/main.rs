@@ -3,6 +3,7 @@ use std::env;
 use std::thread;
 // use firebase_rs::*;
 use eventsource::reqwest::Client;
+use git2::{Repository, StatusOptions};
 use reqwest::Url;
 use std::io::{self, Write};
 
@@ -49,9 +50,8 @@ fn run_command_thread() {
                         "q" => return,
                         _ => println!("invalid command"),
                     },
-
+                    // TODO: require arg for s somehow
                     &[command, arg] => match command {
-                        "a" => abort_timer(),
                         "s" => start_timer(arg.to_string()),
                         _ => println!("invalid command"),
                     },
@@ -64,7 +64,32 @@ fn run_command_thread() {
 }
 
 fn start_timer(length: String) {
-    println!("starting timer for {} minutes", length)
+    let timer_key = git_repo_url().unwrap();
+    println!(
+        "starting timer for {} minutes using repo key {}",
+        length, timer_key
+    );
+}
+
+fn git_repo_url() -> Result<String, String> {
+    return match Repository::open(".") {
+        Ok(repo) => {
+            /*
+            repo.remotes().iter().for_each(| remote |
+                remote.iter().for_each(| r | println!("{}", r.unwrap())
+            ));
+            */
+            println!(
+                "REMOTE: {}",
+                repo.find_remote("origin").unwrap().url().unwrap()
+            );
+            Ok("xxx".to_string())
+        }
+        Err(error) => {
+            eprintln!("error: {:?}", error);
+            Err("wtf".to_string())
+        }
+    };
 }
 
 fn abort_timer() {
@@ -84,7 +109,6 @@ fn run_event_thread() {
         }
     }
 }
-
 
 /* // code for interacting with firebase:
 let db: Firebase;
