@@ -7,7 +7,6 @@ use reqwest::Url;
 use std::io::{self, Write};
 
 static FIREBASE_URL: &str = "https://rust-timer-default-rtdb.firebaseio.com/someUID.json";
-// static PROGNAME: &str = "mobdtimer";
 static PROMPT: &str = "mobdtimer> ";
 
 fn main() {
@@ -52,6 +51,7 @@ fn run_command_thread() {
                     },
 
                     &[command, arg] => match command {
+                        "a" => abort_timer(),
                         "s" => start_timer(arg.to_string()),
                         _ => println!("invalid command"),
                     },
@@ -65,6 +65,10 @@ fn run_command_thread() {
 
 fn start_timer(length: String) {
     println!("starting timer for {} minutes", length)
+}
+
+fn abort_timer() {
+    println!("aborting current timer, if any")
 }
 
 fn run_event_thread() {
@@ -81,8 +85,8 @@ fn run_event_thread() {
     }
 }
 
-// When we need to update firebase:
-/*
+
+/* // code for interacting with firebase:
 let db: Firebase;
 match firebase() {
     Ok(f) => db = f,
@@ -93,21 +97,7 @@ match firebase() {
    }
 }
 
-// fn firebase() -> Result<Firebase> {
-//     Firebase::new(FIREBASE_URL).map_err(|e| e.into())
-// }
+fn firebase() -> Result<Firebase> {
+    Firebase::new(FIREBASE_URL).map_err(|e| e.into())
+}
 */
-
-// fn run_mob_status() -> Result<bool, String> {
-//     let output = Command::new("mob")
-//         .arg("status")
-//         .output()
-//         .expect("failed to execute process");
-//     return if output.status.success() {
-//         let is_mob_programming =
-//             String::from_utf8_lossy(&output.stdout).contains("are mob programming");
-//         Ok(is_mob_programming)
-//     } else {
-//         Err("error getting mob status".to_string())
-//     }
-// }
