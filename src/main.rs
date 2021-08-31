@@ -71,6 +71,21 @@ fn start_timer(length: String) {
     );
 }
 
+fn run_event_thread() {
+    let client = Client::new(Url::parse(FIREBASE_URL).unwrap());
+    for event in client {
+        match event {
+            Ok(good_event) => {
+                println!("\n========{}========\n", good_event);
+                print!("{}", PROMPT);
+                io::stdout().flush().unwrap();
+            }
+            Err(error) => println!("{:?}", error),
+        }
+    }
+}
+
+// TODO: move these to a git module
 fn git_repo_url() -> Result<String, String> {
     return match Repository::open(".") {
         Ok(repo) => {
@@ -85,20 +100,6 @@ fn git_repo_url() -> Result<String, String> {
             Err("wtf".to_string())
         }
     };
-}
-
-fn run_event_thread() {
-    let client = Client::new(Url::parse(FIREBASE_URL).unwrap());
-    for event in client {
-        match event {
-            Ok(good_event) => {
-                println!("\n========{}========\n", good_event);
-                print!("{}", PROMPT);
-                io::stdout().flush().unwrap();
-            }
-            Err(error) => println!("{:?}", error),
-        }
-    }
 }
 
 fn normalize_remote(remote: &str) -> String {
@@ -116,15 +117,16 @@ fn is_ssh_remote(remote: &str) -> bool {
 fn normalize_https_remote(remote: &str) -> String {
     let (_, server_and_path_part) = split_into_two(remote, "//");
     let (server, path) = split_into_two(&server_and_path_part, "/");
-    format!("{}{}", remove_trailing(&server, ':'), prepend_slash_if_missing(&path))
+    format!("{}{}", remove_trailing(&server, ':'), prepend_if_missing(&path, "/"))
 }
 
 fn normalize_ssh_remote(remote: &str) -> String {
     let (_, server_and_path_part) = split_into_two(remote, "@");
     let (server, path) = split_into_two(&server_and_path_part, ":");
-    format!("{}{}", server, prepend_slash_if_missing(&path))
+    format!("{}{}", server, prepend_if_missing(&path, "/"))
 }
 
+// TODO: move these to a string utility module
 fn split_into_two(s: &str, split_on: &str) -> (String, String) {
     match s.find(split_on) {
         Some(index) =>
@@ -138,11 +140,11 @@ fn remove_trailing(s: &str, ch: char) -> String {
     s.split(ch).next().unwrap().to_string()
 }
 
-fn prepend_slash_if_missing(path: &str) -> String {
-    if !path.starts_with("/") {
-        format!("/{}", path)
+fn prepend_if_missing(s: &str, prepend: &str) -> String {
+    if s.starts_with(prepend) {
+        s.to_string()
     } else {
-        path.to_string()
+        format!("{}{}", prepend, s)
     }
 }
 
@@ -166,7 +168,6 @@ mod tests {
             "github.com/openpubmobus/mobdtimer.git"
         )
     }
-
     #[test]
     fn returns_server_slash_path_for_https_ref_without_colon() {
         assert_eq!(
@@ -184,7 +185,6 @@ mod tests {
     }
 
     // split_into_two
-
     #[test]
     fn returns_tuple_for_two_elements() {
         let (first, second) = split_into_two("abc:def", ":");
@@ -222,6 +222,17 @@ mod tests {
     #[test]
     fn returns_trailing_char_when_exists() {
         assert_eq!(remove_trailing("abc:", ':'), "abc");
+    }
+
+    // prepend_if_missing
+    #[test]
+    fn returns_same_when_char_in_first_position() {
+        assert_eq!(prepend_if_missing("/abc", "/"), "/abc");
+    }
+
+    #[test]
+    fn prepends_char_when_not_exists_in_first_position() {
+        assert_eq!(prepend_if_missing("abc", "/"), "/abc");
     }
 }
 
