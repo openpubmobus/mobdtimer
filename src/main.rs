@@ -110,6 +110,74 @@ fn run_event_thread() {
     }
 }
 
+fn normalize_remote(remote: &str) -> String {
+    let mut remote_parts: Vec<&str> = remote.split('@').collect();
+    if remote_parts.len() == 2 {
+        let server_and_path_part = remote_parts[1].to_string();
+        let server_and_path: Vec<&str> = server_and_path_part.split(':').collect();
+        let server = server_and_path[0];
+        let path = server_and_path[1];
+        format!("{}{}", server, prepend_slash_if_missing(path))
+    } else {
+        remote_parts = remote.split("//").collect();
+        let server_and_path_part = remote_parts[1];
+        let server_and_path: Vec<&str> = server_and_path_part.split('/').collect();
+        let server = server_and_path[0];
+        let path = server_and_path[1];
+        format!("{}{}", remove_trailing_colon_if_exists(server), prepend_slash_if_missing(path))
+    }
+}
+
+fn remove_trailing_colon_if_exists(server: &str) -> String {
+    let server_parts: Vec<&str> = server.split(':').collect();
+    server_parts[0].to_string()
+}
+
+fn prepend_slash_if_missing(path: &str) -> String {
+    if !path.starts_with("/") {
+        format!("/{}", path)
+    } else {
+        path.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn returns_server_slash_path_for_ssh_ref() {
+        assert_eq!(
+            normalize_remote("git@github.com:/openpubmobus/mobdtimer.git"),
+            "github.com/openpubmobus/mobdtimer.git"
+        )
+    }
+
+    #[test]
+    fn returns_server_slash_path_for_ssh_ref_without_slash() {
+        assert_eq!(
+            normalize_remote("git@github.com:openpubmobus/mobdtimer.git"),
+            "github.com/openpubmobus/mobdtimer.git"
+        )
+    }
+
+    #[test]
+    fn returns_server_slash_path_for_https_ref_without_colon() {
+        assert_eq!(
+            normalize_remote("https://github.com/openpubmobus/mobdtimer.git"),
+            "github.com/openpubmobus/mobdtimer.git"
+        )
+    }
+
+    #[test]
+    fn returns_server_slash_path_for_https_ref_with_colon() {
+        assert_eq!(
+            normalize_remote("https://github.com:/openpubmobus/mobdtimer.git"),
+            "github.com/openpubmobus/mobdtimer.git"
+        )
+    }
+}
+
 /* // code for interacting with firebase:
 let db: Firebase;
 match firebase() {
@@ -120,6 +188,7 @@ match firebase() {
         std::process::exit(1)
    }
 }
+
 
 fn firebase() -> Result<Firebase> {
     Firebase::new(FIREBASE_URL).map_err(|e| e.into())
