@@ -3,7 +3,7 @@ use std::env;
 use std::thread;
 // use firebase_rs::*;
 use eventsource::reqwest::Client;
-use git2::{Repository, StatusOptions};
+use git2::Repository;
 use reqwest::Url;
 use std::io::{self, Write};
 
@@ -74,11 +74,6 @@ fn start_timer(length: String) {
 fn git_repo_url() -> Result<String, String> {
     return match Repository::open(".") {
         Ok(repo) => {
-            /*
-            repo.remotes().iter().for_each(| remote |
-                remote.iter().for_each(| r | println!("{}", r.unwrap())
-            ));
-            */
             println!(
                 "REMOTE: {}",
                 repo.find_remote("origin").unwrap().url().unwrap()
@@ -90,10 +85,6 @@ fn git_repo_url() -> Result<String, String> {
             Err("wtf".to_string())
         }
     };
-}
-
-fn abort_timer() {
-    println!("aborting current timer, if any")
 }
 
 fn run_event_thread() {
@@ -111,26 +102,40 @@ fn run_event_thread() {
 }
 
 fn normalize_remote(remote: &str) -> String {
-    let mut remote_parts: Vec<&str> = remote.split('@').collect();
-    if remote_parts.len() == 2 {
-        let server_and_path_part = remote_parts[1].to_string();
-        let server_and_path: Vec<&str> = server_and_path_part.split(':').collect();
-        let server = server_and_path[0];
-        let path = server_and_path[1];
-        format!("{}{}", server, prepend_slash_if_missing(path))
+    if is_ssh_remote(remote) {
+        normalize_ssh_remote(remote)
     } else {
-        remote_parts = remote.split("//").collect();
-        let server_and_path_part = remote_parts[1];
-        let server_and_path: Vec<&str> = server_and_path_part.split('/').collect();
-        let server = server_and_path[0];
-        let path = server_and_path[1];
-        format!("{}{}", remove_trailing_colon_if_exists(server), prepend_slash_if_missing(path))
+        normalize_https_remote(remote)
     }
 }
 
-fn remove_trailing_colon_if_exists(server: &str) -> String {
-    let server_parts: Vec<&str> = server.split(':').collect();
-    server_parts[0].to_string()
+fn is_ssh_remote(remote: &str) -> bool {
+    remote.contains('@')
+}
+
+fn normalize_https_remote(remote: &str) -> String {
+    let (_, server_and_path_part) = split_into_two(remote, "//");
+    let (server, path) = split_into_two(&server_and_path_part, "/");
+    format!("{}{}", remove_trailing(&server, ':'), prepend_slash_if_missing(&path))
+}
+
+fn normalize_ssh_remote(remote: &str) -> String {
+    let (_, server_and_path_part) = split_into_two(remote, "@");
+    let (server, path) = split_into_two(&server_and_path_part, ":");
+    format!("{}{}", server, prepend_slash_if_missing(&path))
+}
+
+fn split_into_two(s: &str, split_on: &str) -> (String, String) {
+    match s.find(split_on) {
+        Some(index) =>
+            (s[0..index].to_string(), s[index+split_on.len()..].to_string()),
+        None =>
+            (s.to_string(), "".to_string())
+    }
+}
+
+fn remove_trailing(s: &str, ch: char) -> String {
+    s.split(ch).next().unwrap().to_string()
 }
 
 fn prepend_slash_if_missing(path: &str) -> String {
@@ -145,6 +150,7 @@ fn prepend_slash_if_missing(path: &str) -> String {
 mod tests {
     use super::*;
 
+    // normalize_remote. How do you nest (aggregate) tests a la JS 'describe'?
     #[test]
     fn returns_server_slash_path_for_ssh_ref() {
         assert_eq!(
@@ -175,6 +181,47 @@ mod tests {
             normalize_remote("https://github.com:/openpubmobus/mobdtimer.git"),
             "github.com/openpubmobus/mobdtimer.git"
         )
+    }
+
+    // split_into_two
+
+    #[test]
+    fn returns_tuple_for_two_elements() {
+        let (first, second) = split_into_two("abc:def", ":");
+
+        assert_eq!(first, "abc");
+        assert_eq!(second, "def");
+    }
+
+    #[test]
+    fn returns_tuple_with_null_2nd_when_split_string_not_found() {
+        let (first, second) = split_into_two("abc", ":");
+
+        assert_eq!(first, "abc");
+        assert_eq!(second, "");
+    }
+
+    #[test]
+    fn returns_empty_tuple_when_string_empty() {
+        let (first, second) = split_into_two("", ":");
+
+        assert_eq!(first, "");
+        assert_eq!(second, "");
+
+        // TODO: Why doesn't this work:
+        // let tuple = split_into_two("", ":");
+        // assert_eq!(tuple, ("", ""));
+    }
+
+    // remove_trailing
+    #[test]
+    fn returns_same_when_no_trailing_char() {
+        assert_eq!(remove_trailing("abc", ':'), "abc");
+    }
+
+    #[test]
+    fn returns_trailing_char_when_exists() {
+        assert_eq!(remove_trailing("abc:", ':'), "abc");
     }
 }
 
