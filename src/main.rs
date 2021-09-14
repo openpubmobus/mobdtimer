@@ -1,22 +1,34 @@
 use anyhow::Result;
-use std::env;
-use std::thread;
-// use firebase_rs::*;
 use eventsource::reqwest::Client;
+use firebase_rs::*;
 use git2::Repository;
 use reqwest::Url;
+use std::env;
 use std::io::{self, Write};
+use std::thread;
 
 static FIREBASE_URL: &str = "https://rust-timer-default-rtdb.firebaseio.com/someUID.json";
 static PROMPT: &str = "mobdtimer> ";
 
+struct TimerData {
+    repo_url: String,
+    firebase_conn: Firebase,
+}
+
 fn main() {
+    let repo_url = git_repo_url().unwrap();
+    let normalized_repo_url = normalize_remote(&repo_url);
     let result = process_args();
+    let firebase_conn = firebase().unwrap();
+    let data = TimerData {
+        repo_url: normalized_repo_url,
+        firebase_conn,
+    };
     match result {
         Ok(result) => {
             println!("starting timer for {:?}", result);
             thread::spawn(|| run_event_thread());
-            run_command_thread()
+            run_command_thread(&data)
         }
         Err(message) => {
             eprintln!("{}", message)
@@ -33,10 +45,10 @@ fn process_args() -> Result<i32, String> {
     if duration_result.is_err() {
         return Err("Timer duration must be numeric".to_string());
     }
-    return Ok(duration_result.unwrap());
+    Ok(duration_result.unwrap())
 }
 
-fn run_command_thread() {
+fn run_command_thread(data_ptr: &TimerData) {
     loop {
         let mut input = String::new();
         print!("{}", PROMPT);
@@ -44,15 +56,15 @@ fn run_command_thread() {
         match io::stdin().read_line(&mut input) {
             Ok(_) => {
                 let trimmed = input.trim();
-                match &trimmed.split(" ").collect::<Vec<&str>>()[..] {
-                    &[command] => match command {
+                match &trimmed.split(' ').collect::<Vec<&str>>()[..] {
+                    [command] => match *command {
                         "" => continue,
                         "q" => return,
                         _ => println!("invalid command"),
                     },
                     // TODO: require arg for s somehow
-                    &[command, arg] => match command {
-                        "s" => start_timer(arg.to_string()),
+                    [command, arg] => match *command {
+                        "s" => start_timer(arg.to_string(), data_ptr),
                         _ => println!("invalid command"),
                     },
                     _ => println!("invalid command X"),
@@ -63,12 +75,16 @@ fn run_command_thread() {
     }
 }
 
-fn start_timer(length: String) {
-    let timer_key = git_repo_url().unwrap();
+fn start_timer(length: String, data_ptr: &TimerData) {
+    let timer_key: &str = &data_ptr.repo_url;
     println!(
         "starting timer for {} minutes using repo key {}",
         length, timer_key
     );
+}
+
+fn firebase() -> Result<Firebase> {
+    Firebase::new(FIREBASE_URL).map_err(|e| e.into())
 }
 
 fn run_event_thread() {
@@ -88,13 +104,12 @@ fn run_event_thread() {
 // TODO: move these to a git module
 fn git_repo_url() -> Result<String, String> {
     return match Repository::open(".") {
-        Ok(repo) => {
-            println!(
-                "REMOTE: {}",
-                repo.find_remote("origin").unwrap().url().unwrap()
-            );
-            Ok("xxx".to_string())
-        }
+        Ok(repo) => Ok(repo
+            .find_remote("origin")
+            .unwrap()
+            .url()
+            .unwrap()
+            .to_string()),
         Err(error) => {
             eprintln!("error: {:?}", error);
             Err("wtf".to_string())
@@ -117,7 +132,11 @@ fn is_ssh_remote(remote: &str) -> bool {
 fn normalize_https_remote(remote: &str) -> String {
     let (_, server_and_path_part) = split_into_two(remote, "//");
     let (server, path) = split_into_two(&server_and_path_part, "/");
-    format!("{}{}", remove_trailing(&server, ':'), prepend_if_missing(&path, "/"))
+    format!(
+        "{}{}",
+        remove_trailing(&server, ':'),
+        prepend_if_missing(&path, "/")
+    )
 }
 
 fn normalize_ssh_remote(remote: &str) -> String {
@@ -129,10 +148,11 @@ fn normalize_ssh_remote(remote: &str) -> String {
 // TODO: move these to a string utility module
 fn split_into_two(s: &str, split_on: &str) -> (String, String) {
     match s.find(split_on) {
-        Some(index) =>
-            (s[0..index].to_string(), s[index+split_on.len()..].to_string()),
-        None =>
-            (s.to_string(), "".to_string())
+        Some(index) => (
+            s[0..index].to_string(),
+            s[index + split_on.len()..].to_string(),
+        ),
+        None => (s.to_string(), "".to_string()),
     }
 }
 
@@ -187,10 +207,10 @@ mod tests {
     // split_into_two
     #[test]
     fn returns_tuple_for_two_elements() {
-        let (first, second) = split_into_two("abc:def", ":");
-
-        assert_eq!(first, "abc");
-        assert_eq!(second, "def");
+        assert_eq!(
+            split_into_two("tuv:wxy", ":"),
+            ("tuv".to_string(), "wxy".to_string())
+        );
     }
 
     #[test]
@@ -207,10 +227,6 @@ mod tests {
 
         assert_eq!(first, "");
         assert_eq!(second, "");
-
-        // TODO: Why doesn't this work:
-        // let tuple = split_into_two("", ":");
-        // assert_eq!(tuple, ("", ""));
     }
 
     // remove_trailing
@@ -248,7 +264,4 @@ match firebase() {
 }
 
 
-fn firebase() -> Result<Firebase> {
-    Firebase::new(FIREBASE_URL).map_err(|e| e.into())
-}
 */
