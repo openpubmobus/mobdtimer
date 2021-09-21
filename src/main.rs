@@ -26,6 +26,7 @@ fn main() {
     }
 }
 
+// TODO make args optional?
 fn process_args() -> Result<i32, String> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
@@ -38,30 +39,38 @@ fn process_args() -> Result<i32, String> {
     Ok(duration_result.unwrap())
 }
 
+enum CommandResult { Continue, Exit }
+
 fn run_command_thread(repo_url: &str) {
     loop {
         let mut input = String::new();
         print!("{}", PROMPT);
         io::stdout().flush().unwrap();
         match io::stdin().read_line(&mut input) {
-            Ok(_) => {
-                let trimmed = input.trim();
-                match &trimmed.split(' ').collect::<Vec<&str>>()[..] {
-                    [command] => match *command {
-                        "" => continue,
-                        "q" => return,
-                        _ => println!("invalid command"),
-                    },
-                    // TODO: require arg for s somehow
-                    [command, arg] => match *command {
-                        "s" => start_timer(arg.to_string(), repo_url),
-                        _ => println!("invalid command"),
-                    },
-                    _ => println!("invalid command X"),
-                }
-            }
-            Err(error) => eprintln!("error: {:?}", error),
+            Ok(_) =>
+                match handle_command(repo_url, &input.trim()) {
+                    Ok(CommandResult::Exit) => return,
+                    Ok(_) => continue,
+                    Err(error) => eprintln!("command error: {:?}", error)
+                },
+            Err(error) => eprintln!("input error: {:?}", error),
         }
+    }
+}
+
+fn handle_command(repo_url: &str, command: &&str) -> Result<CommandResult, String> {
+    match &command.split(' ').collect::<Vec<&str>>()[..] {
+        [command] => match *command {
+            ""  => Ok(CommandResult::Continue),
+            "q" => Ok(CommandResult::Exit),
+            _   => Err("invalid command".to_string())
+        },
+        [command, arg] => match *command {
+            "s" => { start_timer(arg.to_string(), repo_url);
+                     Ok(CommandResult::Continue) },
+            _ =>   Err("invalid command".to_string()),
+        },
+        _ => Err("too many arguments".to_string()),
     }
 }
 
