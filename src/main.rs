@@ -5,7 +5,7 @@ use firebase_rs::*;
 use git2::Repository;
 use reqwest::Url;
 use std::env;
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::thread;
 
 static FIREBASE_URL: &str = "https://rust-timer-default-rtdb.firebaseio.com";
@@ -18,7 +18,10 @@ fn main() {
             println!("starting timer for {:?}", result);
             let repo_url_clone = repo_url.clone();
             thread::spawn(|| run_event_thread(repo_url_clone));
-            run_command_thread(&repo_url)
+
+            let stdin = io::stdin();
+            let input = stdin.lock();
+            run_command_thread(&repo_url, input)
         }
         Err(message) => {
             eprintln!("{}", message)
@@ -41,17 +44,17 @@ fn process_args() -> Result<i32, String> {
 
 enum CommandResult { Continue, Exit }
 
-fn run_command_thread(repo_url: &str) {
+fn run_command_thread<R>(repo_url: &str, mut reader: R) where R: BufRead {
     loop {
-        let mut input = String::new();
         print!("{}", PROMPT);
         io::stdout().flush().unwrap();
-        match io::stdin().read_line(&mut input) {
+        let mut input = String::new();
+        match reader.read_line(&mut input) {
             Ok(_) =>
                 match handle_command(repo_url, &input.trim()) {
                     Ok(CommandResult::Exit) => return,
                     Ok(_) => continue,
-                    Err(error) => eprintln!("command error: {:?}", error)
+                    Err(error) => eprintln!("{}", error)
                 },
             Err(error) => eprintln!("input error: {:?}", error),
         }
@@ -61,14 +64,16 @@ fn run_command_thread(repo_url: &str) {
 fn handle_command(repo_url: &str, command: &&str) -> Result<CommandResult, String> {
     match &command.split(' ').collect::<Vec<&str>>()[..] {
         [command] => match *command {
-            ""  => Ok(CommandResult::Continue),
+            "" => Ok(CommandResult::Continue),
             "q" => Ok(CommandResult::Exit),
-            _   => Err("invalid command".to_string())
+            _ => Err("invalid command".to_string())
         },
         [command, arg] => match *command {
-            "s" => { start_timer(arg.to_string(), repo_url);
-                     Ok(CommandResult::Continue) },
-            _ =>   Err("invalid command".to_string()),
+            "s" => {
+                start_timer(arg.to_string(), repo_url);
+                Ok(CommandResult::Continue)
+            }
+            _ => Err("invalid command".to_string()),
         },
         _ => Err("too many arguments".to_string()),
     }
@@ -144,13 +149,12 @@ fn git_repo_url() -> Result<String, String> {
 }
 
 fn normalize_remote(remote: &str) -> String {
-    if is_ssh_remote(remote) {
+    let mut remote = if is_ssh_remote(remote) {
         normalize_ssh_remote(remote)
     } else {
         normalize_https_remote(remote)
     };
-    let remote = remote.replace('/', "_");
-    remote.replace('.', "-")
+    remote.replace('/', "_").replace('.', "-")
 }
 
 fn is_ssh_remote(remote: &str) -> bool {
@@ -205,7 +209,7 @@ mod tests {
     fn returns_server_slash_path_for_ssh_ref() {
         assert_eq!(
             normalize_remote("git@github.com:/openpubmobus/mobdtimer.git"),
-            "github.com/openpubmobus/mobdtimer.git"
+            "github-com_openpubmobus_mobdtimer-git"
         )
     }
 
@@ -213,14 +217,15 @@ mod tests {
     fn returns_server_slash_path_for_ssh_ref_without_slash() {
         assert_eq!(
             normalize_remote("git@github.com:openpubmobus/mobdtimer.git"),
-            "github.com/openpubmobus/mobdtimer.git"
+            "github-com_openpubmobus_mobdtimer-git"
         )
     }
+
     #[test]
     fn returns_server_slash_path_for_https_ref_without_colon() {
         assert_eq!(
             normalize_remote("https://github.com/openpubmobus/mobdtimer.git"),
-            "github.com/openpubmobus/mobdtimer.git"
+            "github-com_openpubmobus_mobdtimer-git"
         )
     }
 
@@ -228,7 +233,7 @@ mod tests {
     fn returns_server_slash_path_for_https_ref_with_colon() {
         assert_eq!(
             normalize_remote("https://github.com:/openpubmobus/mobdtimer.git"),
-            "github.com/openpubmobus/mobdtimer.git"
+            "github-com_openpubmobus_mobdtimer-git"
         )
     }
 
@@ -277,6 +282,15 @@ mod tests {
     #[test]
     fn prepends_char_when_not_exists_in_first_position() {
         assert_eq!(prepend_if_missing("abc", "/"), "/abc");
+    }
+
+    // run_command_thread
+    #[test]
+    fn returns_on_exit_command() {
+        let input = b"q";
+
+        // TODO what does the input[..] mean
+        run_command_thread("", &input[..]);
     }
 }
 
