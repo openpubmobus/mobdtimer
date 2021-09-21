@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::Utc;
 use eventsource::reqwest::Client;
 use firebase_rs::*;
 use git2::Repository;
@@ -7,28 +8,17 @@ use std::env;
 use std::io::{self, Write};
 use std::thread;
 
-static FIREBASE_URL: &str = "https://rust-timer-default-rtdb.firebaseio.com/someUID.json";
+static FIREBASE_URL: &str = "https://rust-timer-default-rtdb.firebaseio.com";
 static PROMPT: &str = "mobdtimer> ";
 
-struct TimerData {
-    repo_url: String,
-    firebase_conn: Firebase,
-}
-
 fn main() {
-    let repo_url = git_repo_url().unwrap();
-    let normalized_repo_url = normalize_remote(&repo_url);
-    let result = process_args();
-    let firebase_conn = firebase().unwrap();
-    let data = TimerData {
-        repo_url: normalized_repo_url,
-        firebase_conn,
-    };
-    match result {
+    let repo_url = normalize_remote(&git_repo_url().unwrap());
+    match process_args() {
         Ok(result) => {
             println!("starting timer for {:?}", result);
-            thread::spawn(|| run_event_thread());
-            run_command_thread(&data)
+            let repo_url_clone = repo_url.clone();
+            thread::spawn(|| run_event_thread(repo_url_clone));
+            run_command_thread(&repo_url)
         }
         Err(message) => {
             eprintln!("{}", message)
@@ -48,7 +38,7 @@ fn process_args() -> Result<i32, String> {
     Ok(duration_result.unwrap())
 }
 
-fn run_command_thread(data_ptr: &TimerData) {
+fn run_command_thread(repo_url: &str) {
     loop {
         let mut input = String::new();
         print!("{}", PROMPT);
@@ -64,7 +54,7 @@ fn run_command_thread(data_ptr: &TimerData) {
                     },
                     // TODO: require arg for s somehow
                     [command, arg] => match *command {
-                        "s" => start_timer(arg.to_string(), data_ptr),
+                        "s" => start_timer(arg.to_string(), repo_url),
                         _ => println!("invalid command"),
                     },
                     _ => println!("invalid command X"),
@@ -75,20 +65,47 @@ fn run_command_thread(data_ptr: &TimerData) {
     }
 }
 
-fn start_timer(length: String, data_ptr: &TimerData) {
-    let timer_key: &str = &data_ptr.repo_url;
-    println!(
-        "starting timer for {} minutes using repo key {}",
-        length, timer_key
-    );
+fn start_timer(duration_in_minutes: String, repo_url: &str) {
+    // TODO: blow up if not numeric
+    let duration = duration_in_minutes.parse::<u64>().unwrap();
+    println!("starting timer for {} minutes using repo key {}", duration, repo_url);
+
+    let firebase_conn = firebase().unwrap();
+
+    let end_time = store_future_time(&firebase_conn, None, duration, &repo_url);
+    println!("Timer started, id: {}", &repo_url);
+    // task::block_on(task::spawn(notify_at(
+    //     end_time.unwrap(),
+    //     notification,
+    //     Arc::new(AtomicBool::new(false)),
+    // )));
+}
+
+fn store_future_time(
+    firebase: &Firebase,
+    given_time: Option<i64>,
+    wait_minutes: u64,
+    uid: &str,
+) -> Result<i64> {
+    let start_time_epoch = match given_time {
+        Some(time) => time,
+        None => Utc::now().timestamp(),
+    };
+
+    let end_time = start_time_epoch + (wait_minutes as i64) * 60;
+    let timer = firebase.at(uid)?;
+    timer.set(&format!("{{\"endTime\":{}}}", end_time))?;
+
+    Ok(end_time)
 }
 
 fn firebase() -> Result<Firebase> {
     Firebase::new(FIREBASE_URL).map_err(|e| e.into())
 }
 
-fn run_event_thread() {
-    let client = Client::new(Url::parse(FIREBASE_URL).unwrap());
+fn run_event_thread(repo_url: String) {
+    let url = format!("{}/{}.json", FIREBASE_URL, repo_url);
+    let client = Client::new(Url::parse(&url).unwrap());
     for event in client {
         match event {
             Ok(good_event) => {
@@ -122,7 +139,9 @@ fn normalize_remote(remote: &str) -> String {
         normalize_ssh_remote(remote)
     } else {
         normalize_https_remote(remote)
-    }
+    };
+    let remote = remote.replace('/', "_");
+    remote.replace('.', "-")
 }
 
 fn is_ssh_remote(remote: &str) -> bool {
