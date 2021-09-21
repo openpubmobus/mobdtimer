@@ -87,7 +87,7 @@ fn start_timer(duration_in_minutes: String, repo_url: &str) {
     let firebase_conn = firebase().unwrap();
 
     let end_time = store_future_time(&firebase_conn, None, duration, &repo_url);
-    println!("Timer started, id: {}", &repo_url);
+    println!("Timer started, id: {} end_time: {:?}", &repo_url, end_time);
     // task::block_on(task::spawn(notify_at(
     //     end_time.unwrap(),
     //     notification,
@@ -149,12 +149,9 @@ fn git_repo_url() -> Result<String, String> {
 }
 
 fn normalize_remote(remote: &str) -> String {
-    let mut remote = if is_ssh_remote(remote) {
-        normalize_ssh_remote(remote)
-    } else {
+    if is_ssh_remote(remote) { normalize_ssh_remote(remote) } else {
         normalize_https_remote(remote)
-    };
-    remote.replace('/', "_").replace('.', "-")
+    }.replace('/', "_").replace('.', "-")
 }
 
 fn is_ssh_remote(remote: &str) -> bool {
