@@ -21,7 +21,8 @@ fn main() {
 
             let stdin = io::stdin();
             let input = stdin.lock();
-            run_command_thread(&repo_url, input)
+            let output = io::stdout();
+            run_command_thread(&repo_url, input, output)
         }
         Err(message) => {
             eprintln!("{}", message)
@@ -44,7 +45,8 @@ fn process_args() -> Result<i32, String> {
 
 enum CommandResult { Continue, Exit }
 
-fn run_command_thread<R>(repo_url: &str, mut reader: R) where R: BufRead {
+fn run_command_thread<R, W>(repo_url: &str, mut reader: R, mut writer: W)
+    where R: BufRead, W: Write {
     loop {
         print!("{}", PROMPT);
         io::stdout().flush().unwrap();
@@ -54,9 +56,9 @@ fn run_command_thread<R>(repo_url: &str, mut reader: R) where R: BufRead {
                 match handle_command(repo_url, &input.trim()) {
                     Ok(CommandResult::Exit) => return,
                     Ok(_) => continue,
-                    Err(error) => eprintln!("{}", error)
+                    Err(error) => writeln!(&mut writer, "{}", error).expect("Unable to write")
                 },
-            Err(error) => eprintln!("input error: {:?}", error),
+            Err(error) => writeln!(&mut writer, "input error: {:?}", error).expect("Unable to write"),
         }
     }
 }
@@ -201,7 +203,8 @@ fn prepend_if_missing(s: &str, prepend: &str) -> String {
 mod tests {
     use super::*;
 
-    // normalize_remote. How do you nest (aggregate) tests a la JS 'describe'?
+    // TODO: How do you nest (aggregate) tests a la JS 'describe'?
+    // normalize_remote.
     #[test]
     fn returns_server_slash_path_for_ssh_ref() {
         assert_eq!(
@@ -284,23 +287,27 @@ mod tests {
     // run_command_thread
     #[test]
     fn returns_on_exit_command() {
-        let input = b"q";
+        let commands = b"q";
+        let mut output = Vec::new();
 
         // TODO what does the input[..] mean
-        run_command_thread("", &input[..]);
+        run_command_thread("", &commands[..], &mut output);
+
+        assert_output(output, "");
+    }
+
+    #[test]
+    fn prints_error_on_errored_command() {
+        let commands = b"z\nq";
+        let mut output = Vec::new();
+
+        run_command_thread("", &commands[..], &mut output);
+
+        assert_output(output, "invalid command\n");
+    }
+
+    fn assert_output(output: Vec<u8>, expected_output: &str) {
+        assert_eq!(String::from_utf8(output).expect("Not UTF-8"),
+                   expected_output);
     }
 }
-
-/* // code for interacting with firebase:
-let db: Firebase;
-match firebase() {
-    Ok(f) => db = f,
-    Err(e) => {
-        eprintln!("Firebase connection error:");
-        eprintln!("{}", e);
-        std::process::exit(1)
-   }
-}
-
-
-*/
