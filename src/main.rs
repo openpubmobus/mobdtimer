@@ -1,4 +1,5 @@
-use std::env;
+//use std::env;
+use async_std::task;
 use std::io::{self, BufRead, Write};
 use std::thread;
 
@@ -7,14 +8,16 @@ use chrono::Utc;
 use eventsource::reqwest::Client;
 use firebase_rs::*;
 use reqwest::Url;
+use std::time::Duration;
 
-mod string_util;
 mod git;
+mod string_util;
 
 static FIREBASE_URL: &str = "https://rust-timer-default-rtdb.firebaseio.com";
 static PROMPT: &str = "mobdtimer> ";
 
 fn main() {
+    //start_timer(Utc::now().timestamp() + 10);
     match process_args() {
         Ok(result) => {
             println!("starting timer for {:?}", result);
@@ -47,22 +50,29 @@ fn process_args() -> Result<i32, String> {
     Ok(0)
 }
 
-enum CommandResult { Continue, Exit }
+enum CommandResult {
+    Continue,
+    Exit,
+}
 
 fn run_command_thread<R, W>(repo_url: &str, mut reader: R, mut writer: W)
-    where R: BufRead, W: Write {
+where
+    R: BufRead,
+    W: Write,
+{
     loop {
         print!("{}", PROMPT);
         io::stdout().flush().unwrap();
         let mut input = String::new();
         match reader.read_line(&mut input) {
-            Ok(_) =>
-                match handle_command(repo_url, &input.trim()) {
-                    Ok(CommandResult::Exit) => return,
-                    Ok(_) => continue,
-                    Err(error) => writeln!(&mut writer, "{}", error).expect("Unable to write")
-                },
-            Err(error) => writeln!(&mut writer, "input error: {:?}", error).expect("Unable to write"),
+            Ok(_) => match handle_command(repo_url, &input.trim()) {
+                Ok(CommandResult::Exit) => return,
+                Ok(_) => continue,
+                Err(error) => writeln!(&mut writer, "{}", error).expect("Unable to write"),
+            },
+            Err(error) => {
+                writeln!(&mut writer, "input error: {:?}", error).expect("Unable to write")
+            }
         }
     }
 }
@@ -72,11 +82,11 @@ fn handle_command(repo_url: &str, command: &&str) -> Result<CommandResult, Strin
         [command] => match *command {
             "" => Ok(CommandResult::Continue),
             "q" => Ok(CommandResult::Exit),
-            _ => Err("invalid command".to_string())
+            _ => Err("invalid command".to_string()),
         },
         [command, arg] => match *command {
             "s" => {
-                start_timer(arg.to_string(), repo_url);
+                create_timer(arg.to_string(), repo_url);
                 Ok(CommandResult::Continue)
             }
             _ => Err("invalid command".to_string()),
@@ -85,20 +95,18 @@ fn handle_command(repo_url: &str, command: &&str) -> Result<CommandResult, Strin
     }
 }
 
-fn start_timer(duration_in_minutes: String, repo_url: &str) {
+fn create_timer(duration_in_minutes: String, repo_url: &str) {
     // TODO: blow up if not numeric
     let duration = duration_in_minutes.parse::<u64>().unwrap();
-    println!("starting timer for {} minutes using repo key {}", duration, repo_url);
+    println!(
+        "starting timer for {} minutes using repo key {}",
+        duration, repo_url
+    );
 
     let firebase_conn = firebase().unwrap();
 
-    let end_time = store_future_time(&firebase_conn, None, duration, &repo_url);
+    let end_time = store_future_time(&firebase_conn, None, duration, repo_url);
     println!("Timer started, id: {} end_time: {:?}", &repo_url, end_time);
-    // task::block_on(task::spawn(notify_at(
-    //     end_time.unwrap(),
-    //     notification,
-    //     Arc::new(AtomicBool::new(false)),
-    // )));
 }
 
 fn store_future_time(
@@ -129,13 +137,31 @@ fn run_event_thread(repo_url: String) {
     for event in client {
         match event {
             Ok(good_event) => {
-                println!("\n========{}========\n", good_event);
-                print!("{}", PROMPT);
+                if let Some(event_type) = good_event.event_type {
+                    match event_type.as_str() {
+                        "put" => println!("===> {:?} <===", good_event.data),
+                        _ => (),
+                    }
+                }
+                //print!("{}", PROMPT);
                 io::stdout().flush().unwrap();
             }
             Err(error) => println!("{:?}", error),
         }
     }
+}
+
+fn start_timer(end_time: i64) {
+    println!("I was here, start_timer");
+    task::spawn(notify_at(end_time));
+}
+
+async fn notify_at(wakeup_time_epoch: i64) {
+    println!("I was here, notify_at");
+    let sleep_seconds = wakeup_time_epoch - Utc::now().timestamp();
+    task::block_on(async move { task::sleep(Duration::from_secs(sleep_seconds as u64)).await });
+    //callback();
+    println!("TIMER FINISHED");
 }
 
 #[cfg(test)]
@@ -158,7 +184,7 @@ mod tests {
 
     #[test]
     fn prints_error_on_errored_command() {
-        let commands = b"z\nq";
+        let commands = b"somebadcommand\nq";
         let mut output = Vec::new();
 
         run_command_thread("", &commands[..], &mut output);
@@ -167,7 +193,9 @@ mod tests {
     }
 
     fn assert_output(output: Vec<u8>, expected_output: &str) {
-        assert_eq!(String::from_utf8(output).expect("Not UTF-8"),
-                   expected_output);
+        assert_eq!(
+            String::from_utf8(output).expect("Not UTF-8"),
+            expected_output
+        );
     }
 }
