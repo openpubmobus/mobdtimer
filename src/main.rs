@@ -5,6 +5,7 @@ use std::thread;
 
 use anyhow::Result;
 use chrono::Utc;
+use eventsource::event::Event;
 use eventsource::reqwest::Client;
 use firebase_rs::*;
 use reqwest::Url;
@@ -17,10 +18,9 @@ static FIREBASE_URL: &str = "https://rust-timer-default-rtdb.firebaseio.com";
 static PROMPT: &str = "mobdtimer> ";
 
 fn main() {
-    //start_timer(Utc::now().timestamp() + 10);
     match process_args() {
         Ok(result) => {
-            println!("starting timer for {:?}", result);
+            // println!("specified timer for {:?}", result);
 
             let repo_url = git::normalize_remote(&git::git_repo_url().unwrap());
             let repo_url_clone = repo_url.clone();
@@ -56,9 +56,9 @@ enum CommandResult {
 }
 
 fn run_command_thread<R, W>(repo_url: &str, mut reader: R, mut writer: W)
-where
-    R: BufRead,
-    W: Write,
+    where
+        R: BufRead,
+        W: Write,
 {
     loop {
         print!("{}", PROMPT);
@@ -137,12 +137,7 @@ fn run_event_thread(repo_url: String) {
     for event in client {
         match event {
             Ok(good_event) => {
-                if let Some(event_type) = good_event.event_type {
-                    match event_type.as_str() {
-                        "put" => println!("===> {:?} <===", good_event.data),
-                        _ => (),
-                    }
-                }
+                handle_event(good_event);
                 //print!("{}", PROMPT);
                 io::stdout().flush().unwrap();
             }
@@ -151,17 +146,28 @@ fn run_event_thread(repo_url: String) {
     }
 }
 
+fn handle_event(event: Event) {
+    if let Some(event_type) = event.event_type {
+        if event_type.as_str() == "put" {
+            handle_put(event.data)
+        }
+    }
+}
+
+fn handle_put(string: String) {
+    println!("put {:?}", string)
+    // if end time not in past:
+    //start_timer(Utc::now().timestamp() + 10);
+    // ALSO: event is sent multiple times
+}
+
 fn start_timer(end_time: i64) {
-    println!("I was here, start_timer");
     task::spawn(notify_at(end_time));
 }
 
 async fn notify_at(wakeup_time_epoch: i64) {
-    println!("I was here, notify_at");
     let sleep_seconds = wakeup_time_epoch - Utc::now().timestamp();
     task::block_on(async move { task::sleep(Duration::from_secs(sleep_seconds as u64)).await });
-    //callback();
-    println!("TIMER FINISHED");
 }
 
 #[cfg(test)]
