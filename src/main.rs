@@ -1,6 +1,6 @@
 //use std::env;
-use async_std::task;
 use std::io::{self, BufRead, Write};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 use anyhow::Result;
@@ -9,6 +9,7 @@ use eventsource::event::Event;
 use eventsource::reqwest::Client;
 use firebase_rs::*;
 use reqwest::Url;
+use serde_json::{json, Value};
 use std::time::Duration;
 
 mod git;
@@ -18,6 +19,8 @@ static FIREBASE_URL: &str = "https://rust-timer-default-rtdb.firebaseio.com";
 static PROMPT: &str = "mobdtimer> ";
 
 fn main() {
+    let timer_control = Arc::new((Mutex::new(false), Condvar::new()));
+
     match process_args() {
         Ok(result) => {
             // println!("specified timer for {:?}", result);
@@ -26,9 +29,14 @@ fn main() {
             let repo_url_clone = repo_url.clone();
             println!("repo key: {}", repo_url);
 
-            thread::spawn(|| run_event_thread(repo_url_clone));
-
-            run_command_thread(&repo_url, io::stdin().lock(), io::stdout())
+            let timer_control_clone = Arc::clone(&timer_control);
+            thread::spawn(move || run_event_thread(repo_url_clone, &timer_control));
+            run_command_thread(
+                &repo_url,
+                &timer_control_clone,
+                io::stdin().lock(),
+                io::stdout(),
+            )
         }
         Err(message) => {
             eprintln!("{}", message)
@@ -55,17 +63,21 @@ enum CommandResult {
     Exit,
 }
 
-fn run_command_thread<R, W>(repo_url: &str, mut reader: R, mut writer: W)
-    where
-        R: BufRead,
-        W: Write,
+fn run_command_thread<R, W>(
+    repo_url: &str,
+    timer_control: &Arc<(Mutex<bool>, Condvar)>,
+    mut reader: R,
+    mut writer: W,
+) where
+    R: BufRead,
+    W: Write,
 {
     loop {
         print!("{}", PROMPT);
         io::stdout().flush().unwrap();
         let mut input = String::new();
         match reader.read_line(&mut input) {
-            Ok(_) => match handle_command(repo_url, &input.trim()) {
+            Ok(_) => match handle_command(repo_url, timer_control, &input.trim()) {
                 Ok(CommandResult::Exit) => return,
                 Ok(_) => continue,
                 Err(error) => writeln!(&mut writer, "{}", error).expect("Unable to write"),
@@ -77,11 +89,16 @@ fn run_command_thread<R, W>(repo_url: &str, mut reader: R, mut writer: W)
     }
 }
 
-fn handle_command(repo_url: &str, command: &&str) -> Result<CommandResult, String> {
+fn handle_command(
+    repo_url: &str,
+    timer_control: &Arc<(Mutex<bool>, Condvar)>,
+    command: &&str,
+) -> Result<CommandResult, String> {
     match &command.split(' ').collect::<Vec<&str>>()[..] {
         [command] => match *command {
             "" => Ok(CommandResult::Continue),
             "q" => Ok(CommandResult::Exit),
+            "k" => Ok(kill_timer(timer_control)),
             _ => Err("invalid command".to_string()),
         },
         [command, arg] => match *command {
@@ -131,13 +148,13 @@ fn firebase() -> Result<Firebase> {
     Firebase::new(FIREBASE_URL).map_err(|e| e.into())
 }
 
-fn run_event_thread(repo_url: String) {
+fn run_event_thread(repo_url: String, timer_control: &Arc<(Mutex<bool>, Condvar)>) {
     let url = format!("{}/{}.json", FIREBASE_URL, repo_url);
     let client = Client::new(Url::parse(&url).unwrap());
     for event in client {
         match event {
             Ok(good_event) => {
-                handle_event(good_event);
+                handle_event(good_event, timer_control);
                 //print!("{}", PROMPT);
                 io::stdout().flush().unwrap();
             }
@@ -146,29 +163,60 @@ fn run_event_thread(repo_url: String) {
     }
 }
 
-fn handle_event(event: Event) {
+fn handle_event(event: Event, timer_control: &Arc<(Mutex<bool>, Condvar)>) {
     if let Some(event_type) = event.event_type {
         if event_type.as_str() == "put" {
-            handle_put(event.data)
+            handle_put(event.data, timer_control)
         }
     }
 }
 
-fn handle_put(string: String) {
-    println!("put {:?}", string)
-    // if end time not in past:
-    //start_timer(Utc::now().timestamp() + 10);
-    // ALSO: event is sent multiple times
+fn handle_put(json_payload: String, timer_control: &Arc<(Mutex<bool>, Condvar)>) {
+    let node: Value = serde_json::from_str(&json_payload).unwrap();
+    if let Some(end_time) = node["data"]["endTime"].as_i64() {
+        if end_time > Utc::now().timestamp() {
+            start_timer(end_time, timer_control);
+        }
+    }
 }
 
-fn start_timer(end_time: i64) {
-    task::spawn(notify_at(end_time));
+fn kill_timer(timer_control: &Arc<(Mutex<bool>, Condvar)>) -> CommandResult {
+    let (lock, cvar) = &**timer_control;
+    let mut started = lock.lock().unwrap();
+    *started = true;
+    cvar.notify_one();
+    CommandResult::Continue
 }
 
-async fn notify_at(wakeup_time_epoch: i64) {
+fn start_timer(end_time: i64, timer_control: &Arc<(Mutex<bool>, Condvar)>) {
+    // wait for the thread to start up
+    let (lock, cvar) = &**timer_control;
+    let mut started = lock.lock().unwrap();
+    // as long as the value inside the `Mutex<bool>` is `false`, we wait
+    let duration = (end_time - Utc::now().timestamp()).unsigned_abs();
+    loop {
+        let result = cvar
+            .wait_timeout(started, Duration::from_secs(duration))
+            .unwrap();
+        started = result.0;
+        if *started {
+            // We received the notification and the value has been updated, we can leave.
+            println!("Got Interrupted");
+            break;
+        } else if result.1.timed_out() {
+            println!("WE'RE DONE");
+            break;
+        }
+    }
+}
+
+/*
+async fn sleep_until_end_time(wakeup_time_epoch: i64) {
     let sleep_seconds = wakeup_time_epoch - Utc::now().timestamp();
     task::block_on(async move { task::sleep(Duration::from_secs(sleep_seconds as u64)).await });
+    println!("timer elapsed");
 }
+*/
 
 #[cfg(test)]
 mod tests {
