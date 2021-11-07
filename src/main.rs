@@ -9,7 +9,8 @@ use eventsource::event::Event;
 use eventsource::reqwest::Client;
 use firebase_rs::*;
 use reqwest::Url;
-use serde_json::{json, Value};
+//use serde_json::{json, Value};
+use serde_json::Value;
 use std::time::Duration;
 
 mod git;
@@ -19,13 +20,15 @@ static FIREBASE_URL: &str = "https://rust-timer-default-rtdb.firebaseio.com";
 static PROMPT: &str = "mobdtimer> ";
 
 struct TimerControl {
-   mutex: Mutex<bool>,
-   condvar: Condvar
+    mutex: Mutex<bool>,
+    condvar: Condvar,
 }
 
+/*
 struct Db {
 
 }
+*/
 
 /*
  * Create two struct, one for firebase (connection + uid), and one for the Arc and friends
@@ -36,11 +39,11 @@ fn main() {
 
     let timer_control = Arc::new(TimerControl {
         mutex: Mutex::new(false),
-        condvar: Condvar::new()
+        condvar: Condvar::new(),
     });
 
     match process_args() {
-        Ok(result) => {
+        Ok(_) => {
             // println!("specified timer for {:?}", result);
 
             let firebase_conn = firebase().unwrap();
@@ -58,7 +61,7 @@ fn main() {
                 &timer_control_clone,
                 io::stdin().lock(),
                 io::stdout(),
-                &firebase_conn_clone
+                &firebase_conn_clone,
             )
         }
         Err(message) => {
@@ -91,7 +94,7 @@ fn run_command_thread<R, W>(
     timer_control: &Arc<TimerControl>,
     mut reader: R,
     mut writer: W,
-    firebase_conn: &Firebase
+    firebase_conn: &Firebase,
 ) where
     R: BufRead,
     W: Write,
@@ -117,7 +120,7 @@ fn handle_command(
     repo_url: &str,
     timer_control: &Arc<TimerControl>,
     command: &&str,
-    firebase_conn: &Firebase
+    firebase_conn: &Firebase,
 ) -> Result<CommandResult, String> {
     match &command.split(' ').collect::<Vec<&str>>()[..] {
         [command] => match *command {
@@ -167,7 +170,9 @@ fn store_future_time(
 
 fn store_end_time(firebase_conn: &Firebase, uid: &str, end_time_epoch: &i64) {
     let timer = firebase_conn.at(uid).unwrap();
-    timer.set(&format!("{{\"endTime\":{}}}", end_time_epoch));
+    timer
+        .set(&format!("{{\"endTime\":{}}}", end_time_epoch))
+        .unwrap();
 }
 
 fn firebase() -> Result<Firebase> {
@@ -208,7 +213,7 @@ fn handle_put(json_payload: String, timer_control: &Arc<TimerControl>, firebase_
 
 fn kill_timer(timer_control: &Arc<TimerControl>) -> CommandResult {
     //let (lock, cvar) = &**timer_control;
-    let TimerControl {mutex, condvar} = &**timer_control;
+    let TimerControl { mutex, condvar } = &**timer_control;
     let mut kill_timer_flag = mutex.lock().unwrap();
     *kill_timer_flag = true;
     condvar.notify_one();
@@ -226,7 +231,7 @@ fn start_timer(end_time: i64, timer_control: &Arc<TimerControl>, _firebase_conn:
     // let (lock, cvar) = &**timer_control;
     //let timer_control_struct = &**timer_control;
     // let TimerControl { lock: mutex, cvar: condvar } = timer_control_struct;
-    let TimerControl {mutex, condvar} = &**timer_control;
+    let TimerControl { mutex, condvar } = &**timer_control;
     let mut kill_timer_flag = mutex.lock().unwrap();
 
     let duration_in_seconds = (end_time - Utc::now().timestamp()).unsigned_abs();
