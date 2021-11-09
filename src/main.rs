@@ -24,15 +24,11 @@ struct TimerControl {
     condvar: Condvar,
 }
 
-/*
+#[derive(Clone)]
 struct Db {
-
+    uid: String,
+    connection: Firebase,
 }
-*/
-
-/*
- * Create two struct, one for firebase (connection + uid), and one for the Arc and friends
- */
 
 fn main() {
     // let timer_control_old = Arc::new((Mutex::new(false), Condvar::new()));
@@ -46,22 +42,21 @@ fn main() {
         Ok(_) => {
             // println!("specified timer for {:?}", result);
 
-            let firebase_conn = firebase().unwrap();
-            let firebase_conn_clone = firebase_conn.clone();
+            let db_control = Db {
+                connection: firebase().unwrap(),
+                uid: git::normalize_remote(&git::git_repo_url().unwrap()),
+            };
+            let db_control_clone = db_control.clone();
 
-            let repo_url = git::normalize_remote(&git::git_repo_url().unwrap());
-            let repo_url_clone = repo_url.clone();
-
-            println!("repo key: {}", repo_url);
+            println!("repo key: {}", db_control.uid);
 
             let timer_control_clone = Arc::clone(&timer_control);
-            thread::spawn(move || run_event_thread(repo_url_clone, &timer_control, &firebase_conn));
+            thread::spawn(move || run_event_thread(&timer_control, &db_control));
             run_command_thread(
-                &repo_url,
                 &timer_control_clone,
+                &db_control_clone,
                 io::stdin().lock(),
                 io::stdout(),
-                &firebase_conn_clone,
             )
         }
         Err(message) => {
@@ -90,11 +85,10 @@ enum CommandResult {
 }
 
 fn run_command_thread<R, W>(
-    repo_url: &str,
     timer_control: &Arc<TimerControl>,
+    db_control: &Db,
     mut reader: R,
     mut writer: W,
-    firebase_conn: &Firebase,
 ) where
     R: BufRead,
     W: Write,
@@ -104,7 +98,7 @@ fn run_command_thread<R, W>(
         io::stdout().flush().unwrap();
         let mut input = String::new();
         match reader.read_line(&mut input) {
-            Ok(_) => match handle_command(repo_url, timer_control, &input.trim(), firebase_conn) {
+            Ok(_) => match handle_command(timer_control, db_control, &input.trim()) {
                 Ok(CommandResult::Exit) => return,
                 Ok(_) => continue,
                 Err(error) => writeln!(&mut writer, "{}", error).expect("Unable to write"),
@@ -117,10 +111,9 @@ fn run_command_thread<R, W>(
 }
 
 fn handle_command(
-    repo_url: &str,
     timer_control: &Arc<TimerControl>,
+    db_control: &Db,
     command: &&str,
-    firebase_conn: &Firebase,
 ) -> Result<CommandResult, String> {
     match &command.split(' ').collect::<Vec<&str>>()[..] {
         [command] => match *command {
@@ -131,7 +124,7 @@ fn handle_command(
         },
         [command, arg] => match *command {
             "s" => {
-                create_timer(arg.to_string(), repo_url, firebase_conn);
+                create_timer(arg.to_string(), db_control);
                 Ok(CommandResult::Continue)
             }
             _ => Err("invalid command".to_string()),
@@ -140,36 +133,34 @@ fn handle_command(
     }
 }
 
-fn create_timer(duration_in_minutes: String, repo_url: &str, firebase_conn: &Firebase) {
+fn create_timer(duration_in_minutes: String, db_control: &Db) {
     // TODO: blow up if not numeric
     let duration = duration_in_minutes.parse::<u64>().unwrap();
     println!(
         "starting timer for {} minutes using repo key {}",
-        duration, repo_url
+        duration, db_control.uid
     );
 
-    let end_time = store_future_time(&firebase_conn, None, duration, repo_url);
-    println!("Timer started, id: {} end_time: {:?}", &repo_url, end_time);
+    let end_time = store_future_time(db_control, None, duration);
+    println!(
+        "Timer started, id: {} end_time: {:?}",
+        db_control.uid, end_time
+    );
 }
 
-fn store_future_time(
-    firebase_conn: &Firebase,
-    given_time: Option<i64>,
-    wait_minutes: u64,
-    uid: &str,
-) -> Result<i64> {
+fn store_future_time(db_control: &Db, given_time: Option<i64>, wait_minutes: u64) -> Result<i64> {
     let start_time_epoch = match given_time {
         Some(time) => time,
         None => Utc::now().timestamp(),
     };
 
     let end_time_epoch = start_time_epoch + (wait_minutes as i64) * 60;
-    store_end_time(firebase_conn, uid, &end_time_epoch);
+    store_end_time(db_control, &end_time_epoch);
     Ok(end_time_epoch)
 }
 
-fn store_end_time(firebase_conn: &Firebase, uid: &str, end_time_epoch: &i64) {
-    let timer = firebase_conn.at(uid).unwrap();
+fn store_end_time(db_control: &Db, end_time_epoch: &i64) {
+    let timer = db_control.connection.at(&db_control.uid).unwrap();
     timer
         .set(&format!("{{\"endTime\":{}}}", end_time_epoch))
         .unwrap();
@@ -179,13 +170,13 @@ fn firebase() -> Result<Firebase> {
     Firebase::new(FIREBASE_URL).map_err(|e| e.into())
 }
 
-fn run_event_thread(repo_url: String, timer_control: &Arc<TimerControl>, firebase_conn: &Firebase) {
-    let url = format!("{}/{}.json", FIREBASE_URL, repo_url);
+fn run_event_thread(timer_control: &Arc<TimerControl>, db_control: &Db) {
+    let url = format!("{}/{}.json", FIREBASE_URL, db_control.uid);
     let client = Client::new(Url::parse(&url).unwrap());
     for event in client {
         match event {
             Ok(good_event) => {
-                handle_event(good_event, timer_control, firebase_conn);
+                handle_event(good_event, timer_control, &db_control.connection);
                 //print!("{}", PROMPT);
                 io::stdout().flush().unwrap();
             }
