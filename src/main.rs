@@ -31,16 +31,12 @@ struct Db {
 }
 
 fn main() {
-    // let timer_control_old = Arc::new((Mutex::new(false), Condvar::new()));
-
-    let timer_control = Arc::new(TimerControl {
-        mutex: Mutex::new(false),
-        condvar: Condvar::new(),
-    });
-
     match process_args() {
         Ok(_) => {
-            // println!("specified timer for {:?}", result);
+            let timer_control = Arc::new(TimerControl {
+                mutex: Mutex::new(false),
+                condvar: Condvar::new(),
+            });
 
             let db_control = Db {
                 connection: firebase().unwrap(),
@@ -136,16 +132,10 @@ fn handle_command(
 fn create_timer(duration_in_minutes: String, db_control: &Db) {
     // TODO: blow up if not numeric
     let duration = duration_in_minutes.parse::<u64>().unwrap();
-    println!(
-        "starting timer for {} minutes using repo key {}",
-        duration, db_control.uid
-    );
+    println!("starting timer for {} minutes using repo key {}", duration, db_control.uid);
 
     let end_time = store_future_time(db_control, None, duration);
-    println!(
-        "Timer started, id: {} end_time: {:?}",
-        db_control.uid, end_time
-    );
+    println!("Timer started, id: {} end_time: {:?}", db_control.uid, end_time);
 }
 
 fn store_future_time(db_control: &Db, given_time: Option<i64>, wait_minutes: u64) -> Result<i64> {
@@ -176,8 +166,7 @@ fn run_event_thread(timer_control: &Arc<TimerControl>, db_control: &Db) {
     for event in client {
         match event {
             Ok(good_event) => {
-                handle_event(good_event, timer_control, &db_control.connection);
-                //print!("{}", PROMPT);
+                handle_event(good_event, timer_control, &db_control);
                 io::stdout().flush().unwrap();
             }
             Err(error) => println!("{:?}", error),
@@ -185,25 +174,26 @@ fn run_event_thread(timer_control: &Arc<TimerControl>, db_control: &Db) {
     }
 }
 
-fn handle_event(event: Event, timer_control: &Arc<TimerControl>, firebase_conn: &Firebase) {
+fn handle_event(event: Event, timer_control: &Arc<TimerControl>, db_control: &Db) {
+    println!("received event {:?}", event.event_type);
     if let Some(event_type) = event.event_type {
         if event_type.as_str() == "put" {
-            handle_put(event.data, timer_control, firebase_conn)
+            println!("put event");
+            start_new_timer_via_put_event(event.data, timer_control, db_control)
         }
     }
 }
 
-fn handle_put(json_payload: String, timer_control: &Arc<TimerControl>, firebase_conn: &Firebase) {
+fn start_new_timer_via_put_event(json_payload: String, timer_control: &Arc<TimerControl>, db_control: &Db) {
     let node: Value = serde_json::from_str(&json_payload).unwrap();
     if let Some(end_time) = node["data"]["endTime"].as_i64() {
         if end_time > Utc::now().timestamp() {
-            start_timer(end_time, timer_control, firebase_conn);
+            start_timer(end_time, timer_control, db_control);
         }
     }
 }
 
 fn kill_timer(timer_control: &Arc<TimerControl>) -> CommandResult {
-    //let (lock, cvar) = &**timer_control;
     let TimerControl { mutex, condvar } = &**timer_control;
     let mut kill_timer_flag = mutex.lock().unwrap();
     *kill_timer_flag = true;
@@ -212,16 +202,20 @@ fn kill_timer(timer_control: &Arc<TimerControl>) -> CommandResult {
 }
 
 /*
-struct TimerControl {
-   mutex: Mutex<bool>,
-   condvar: Condvar
-}
+
+KILL:
+
+    YOU                        ME
+
+    s 1
+    k     => set end time
+
+
+
+
  */
 
-fn start_timer(end_time: i64, timer_control: &Arc<TimerControl>, _firebase_conn: &Firebase) {
-    // let (lock, cvar) = &**timer_control;
-    //let timer_control_struct = &**timer_control;
-    // let TimerControl { lock: mutex, cvar: condvar } = timer_control_struct;
+fn start_timer(end_time: i64, timer_control: &Arc<TimerControl>, db_control: &Db) {
     let TimerControl { mutex, condvar } = &**timer_control;
     let mut kill_timer_flag = mutex.lock().unwrap();
 
@@ -234,24 +228,16 @@ fn start_timer(end_time: i64, timer_control: &Arc<TimerControl>, _firebase_conn:
         kill_timer_flag = result.0;
         if *kill_timer_flag {
             println!("timer killed");
-            //store_end_time(firebase_conn, uid, &end_time_epoch);
+            store_end_time(db_control, &(Utc::now().timestamp() -1));
             break;
         } else if result.1.timed_out() {
             println!("timer completed");
-            //store_end_time(firebase_conn, uid, &end_time_epoch);
+            store_end_time(db_control, &(Utc::now().timestamp() -1));
             break;
         }
         // else: spurious wakeup; restart loop
     }
 }
-
-/*
-async fn sleep_until_end_time(wakeup_time_epoch: i64) {
-    let sleep_seconds = wakeup_time_epoch - Utc::now().timestamp();
-    task::block_on(async move { task::sleep(Duration::from_secs(sleep_seconds as u64)).await });
-    println!("timer elapsed");
-}
-*/
 
 #[cfg(test)]
 mod tests {
