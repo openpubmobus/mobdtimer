@@ -30,6 +30,11 @@ struct Db {
     connection: Firebase,
 }
 
+fn flushed_print(line: &str) {
+    println!("{}", line);
+    io::stdout().flush().unwrap();
+}
+
 fn main() {
     match process_args() {
         Ok(_) => {
@@ -46,14 +51,8 @@ fn main() {
 
             println!("repo key: {}", db_control.uid);
 
-            let timer_control_clone = Arc::clone(&timer_control);
             thread::spawn(move || run_event_thread(&timer_control, &db_control));
-            run_command_thread(
-                &timer_control_clone,
-                &db_control_clone,
-                io::stdin().lock(),
-                io::stdout(),
-            )
+            run_command_thread(&db_control_clone, io::stdin().lock(), io::stdout())
         }
         Err(message) => {
             eprintln!("{}", message)
@@ -80,12 +79,8 @@ enum CommandResult {
     Exit,
 }
 
-fn run_command_thread<R, W>(
-    timer_control: &Arc<TimerControl>,
-    db_control: &Db,
-    mut reader: R,
-    mut writer: W,
-) where
+fn run_command_thread<R, W>(db_control: &Db, mut reader: R, mut writer: W)
+where
     R: BufRead,
     W: Write,
 {
@@ -94,7 +89,7 @@ fn run_command_thread<R, W>(
         io::stdout().flush().unwrap();
         let mut input = String::new();
         match reader.read_line(&mut input) {
-            Ok(_) => match handle_command(timer_control, db_control, &input.trim()) {
+            Ok(_) => match handle_command(db_control, &input.trim()) {
                 Ok(CommandResult::Exit) => return,
                 Ok(_) => continue,
                 Err(error) => writeln!(&mut writer, "{}", error).expect("Unable to write"),
@@ -106,21 +101,20 @@ fn run_command_thread<R, W>(
     }
 }
 
-fn handle_command(
-    timer_control: &Arc<TimerControl>,
-    db_control: &Db,
-    command: &&str,
-) -> Result<CommandResult, String> {
+fn handle_command(db_control: &Db, command: &&str) -> Result<CommandResult, String> {
     match &command.split(' ').collect::<Vec<&str>>()[..] {
         [command] => match *command {
             "" => Ok(CommandResult::Continue),
             "q" => Ok(CommandResult::Exit),
-            "k" => Ok(kill_timer(timer_control)),
+            "k" => {
+                db_stop_timer(db_control);
+                Ok(CommandResult::Continue)
+            }
             _ => Err("invalid command".to_string()),
         },
         [command, arg] => match *command {
             "s" => {
-                create_timer(arg.to_string(), db_control);
+                db_create_timer(arg.to_string(), db_control);
                 Ok(CommandResult::Continue)
             }
             _ => Err("invalid command".to_string()),
@@ -129,13 +123,24 @@ fn handle_command(
     }
 }
 
-fn create_timer(duration_in_minutes: String, db_control: &Db) {
+fn db_create_timer(duration_in_minutes: String, db_control: &Db) {
     // TODO: blow up if not numeric
     let duration = duration_in_minutes.parse::<u64>().unwrap();
-    println!("starting timer for {} minutes using repo key {}", duration, db_control.uid);
+    println!(
+        "starting timer for {} minutes using repo key {}",
+        duration, db_control.uid
+    );
 
     let end_time = store_future_time(db_control, None, duration);
-    println!("Timer started, id: {} end_time: {:?}", db_control.uid, end_time);
+    println!(
+        "Timer started, id: {} end_time: {:?}",
+        db_control.uid, end_time
+    );
+}
+
+fn db_stop_timer(db_control: &Db) {
+    store_end_time(db_control, &(Utc::now().timestamp() - 1));
+    println!("End time in past stored");
 }
 
 fn store_future_time(db_control: &Db, given_time: Option<i64>, wait_minutes: u64) -> Result<i64> {
@@ -166,34 +171,38 @@ fn run_event_thread(timer_control: &Arc<TimerControl>, db_control: &Db) {
     for event in client {
         match event {
             Ok(good_event) => {
-                handle_event(good_event, timer_control, &db_control);
-                io::stdout().flush().unwrap();
+                handle_event(good_event, timer_control);
             }
             Err(error) => println!("{:?}", error),
         }
     }
 }
 
-fn handle_event(event: Event, timer_control: &Arc<TimerControl>, db_control: &Db) {
-    println!("received event {:?}", event.event_type);
+fn handle_event(event: Event, timer_control: &Arc<TimerControl>) {
     if let Some(event_type) = event.event_type {
         if event_type.as_str() == "put" {
-            println!("put event");
-            start_new_timer_via_put_event(event.data, timer_control, db_control)
+            let x = format!("put event: {}", event.data);
+            flushed_print(&x);
+            on_new_event(event.data, timer_control)
         }
     }
 }
 
-fn start_new_timer_via_put_event(json_payload: String, timer_control: &Arc<TimerControl>, db_control: &Db) {
+fn on_new_event(json_payload: String, timer_control: &Arc<TimerControl>) {
     let node: Value = serde_json::from_str(&json_payload).unwrap();
     if let Some(end_time) = node["data"]["endTime"].as_i64() {
         if end_time > Utc::now().timestamp() {
-            start_timer(end_time, timer_control, db_control);
+            flushed_print("starting a timer");
+            start_timer(end_time, timer_control);
+        } else {
+            flushed_print("killing a timer");
+            kill_timer_thread(timer_control);
         }
     }
 }
 
-fn kill_timer(timer_control: &Arc<TimerControl>) -> CommandResult {
+fn kill_timer_thread(timer_control: &Arc<TimerControl>) -> CommandResult {
+    flushed_print("I was here - kill_timer_thread");
     let TimerControl { mutex, condvar } = &**timer_control;
     let mut kill_timer_flag = mutex.lock().unwrap();
     *kill_timer_flag = true;
@@ -211,11 +220,26 @@ KILL:
     k     => set end time
 
 
+1. successful kill
+
+                      command thread        event thread
+  Jeff  start timer      save end time +5      put => start new timer thread that stops at +5
+  Yves                                         put =>  start new timer thread that stops at +5
+  Jeff  kill timer       save a time in past   put => if time in past, kill timer thread.
+  Yves
+
+
+2. failed kill
+                      command thread        event thread
+  Jeff  start timer      save end time +5      put => start new timer thread that stops at +5
+  Yves                                         put =>  start new timer thread that stops at +5
+  Yves  start timer (at +2) => if end time in future, disallow, message "There is an existing timer that is done at XX. You must first kill it using the k command."
+
 
 
  */
 
-fn start_timer(end_time: i64, timer_control: &Arc<TimerControl>, db_control: &Db) {
+fn start_timer(end_time: i64, timer_control: &Arc<TimerControl>) {
     let TimerControl { mutex, condvar } = &**timer_control;
     let mut kill_timer_flag = mutex.lock().unwrap();
 
@@ -227,13 +251,13 @@ fn start_timer(end_time: i64, timer_control: &Arc<TimerControl>, db_control: &Db
             .unwrap();
         kill_timer_flag = result.0;
         if *kill_timer_flag {
-            println!("timer killed");
-            store_end_time(db_control, &(Utc::now().timestamp() -1));
+            flushed_print("timer killed");
             break;
         } else if result.1.timed_out() {
-            println!("timer completed");
-            store_end_time(db_control, &(Utc::now().timestamp() -1));
+            flushed_print("timer completed");
             break;
+        } else {
+            flushed_print("what happened here??");
         }
         // else: spurious wakeup; restart loop
     }
