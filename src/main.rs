@@ -180,6 +180,7 @@ fn run_event_thread(timer_control: &Arc<TimerControl>, db_control: &Db) {
 
 fn handle_event(event: Event, timer_control: &Arc<TimerControl>) {
     if let Some(event_type) = event.event_type {
+        println!("{:?}", event.data);
         if event_type.as_str() == "put" {
             let x = format!("put event: {}", event.data);
             flushed_print(&x);
@@ -193,7 +194,8 @@ fn on_new_event(json_payload: String, timer_control: &Arc<TimerControl>) {
     if let Some(end_time) = node["data"]["endTime"].as_i64() {
         if end_time > Utc::now().timestamp() {
             flushed_print("starting a timer");
-            start_timer(end_time, timer_control);
+            let timer_control_clone = timer_control.clone();
+            thread::spawn(move || start_timer(end_time, &timer_control_clone));
         } else {
             flushed_print("killing a timer");
             kill_timer_thread(timer_control);
