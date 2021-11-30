@@ -20,6 +20,7 @@ static FIREBASE_URL: &str = "https://rust-timer-default-rtdb.firebaseio.com";
 static PROMPT: &str = "mobdtimer> ";
 
 struct TimerControl {
+    last_end_time: Mutex<i64>,
     mutex: Mutex<bool>,
     condvar: Condvar,
 }
@@ -39,6 +40,7 @@ fn main() {
     match process_args() {
         Ok(_) => {
             let timer_control = Arc::new(TimerControl {
+                last_end_time: Mutex::new(0),
                 mutex: Mutex::new(false),
                 condvar: Condvar::new(),
             });
@@ -192,10 +194,12 @@ fn handle_event(event: Event, timer_control: &Arc<TimerControl>) {
 fn on_new_event(json_payload: String, timer_control: &Arc<TimerControl>) {
     let node: Value = serde_json::from_str(&json_payload).unwrap();
     if let Some(end_time) = node["data"]["endTime"].as_i64() {
+        let mut mut_last_end_time = timer_control.last_end_time.lock().unwrap();
+        *mut_last_end_time = end_time;
         if end_time > Utc::now().timestamp() {
             flushed_print("starting a timer");
             let timer_control_clone = timer_control.clone();
-            thread::spawn(move || start_timer(end_time, &timer_control_clone));
+            thread::spawn(move || start_timer(&timer_control_clone));
         } else {
             flushed_print("killing a timer");
             kill_timer_thread(timer_control);
@@ -205,7 +209,11 @@ fn on_new_event(json_payload: String, timer_control: &Arc<TimerControl>) {
 
 fn kill_timer_thread(timer_control: &Arc<TimerControl>) -> CommandResult {
     flushed_print("I was here - kill_timer_thread");
-    let TimerControl { mutex, condvar } = &**timer_control;
+    let TimerControl {
+        last_end_time: _,
+        mutex,
+        condvar,
+    } = &**timer_control;
     let mut kill_timer_flag = mutex.lock().unwrap();
     *kill_timer_flag = true;
     condvar.notify_one();
@@ -241,11 +249,16 @@ KILL:
 
  */
 
-fn start_timer(end_time: i64, timer_control: &Arc<TimerControl>) {
-    let TimerControl { mutex, condvar } = &**timer_control;
+fn start_timer(timer_control: &Arc<TimerControl>) {
+    let TimerControl {
+        last_end_time,
+        mutex,
+        condvar,
+    } = &**timer_control;
     let mut kill_timer_flag = mutex.lock().unwrap();
 
-    let duration_in_seconds = (end_time - Utc::now().timestamp()).unsigned_abs();
+    let duration_in_seconds =
+        (*last_end_time.lock().unwrap() - Utc::now().timestamp()).unsigned_abs();
 
     loop {
         let result = condvar
