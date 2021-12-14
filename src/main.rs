@@ -182,12 +182,15 @@ fn run_event_thread(timer_control: &Arc<TimerControl>, db_control: &Db) {
 
 fn handle_event(event: Event, timer_control: &Arc<TimerControl>) {
     if let Some(event_type) = event.event_type {
-        println!("{:?}", event.data);
         if event_type.as_str() == "put" {
-            let x = format!("put event: {}", event.data);
+            let x = format!("put; event id: {:?} >>> {:?}", event.id, event.data);
             flushed_print(&x);
             on_new_event(event.data, timer_control)
         }
+        /* else {
+            println!("not put; event id {:?} >>> {:?}", event.id, event.data)
+        }
+        */
     }
 }
 
@@ -201,14 +204,13 @@ fn on_new_event(json_payload: String, timer_control: &Arc<TimerControl>) {
             let timer_control_clone = timer_control.clone();
             thread::spawn(move || start_timer(&timer_control_clone));
         } else {
-            flushed_print("killing a timer");
+            flushed_print("end time passed -- killing a timer");
             kill_timer_thread(timer_control);
         }
     }
 }
 
 fn kill_timer_thread(timer_control: &Arc<TimerControl>) -> CommandResult {
-    flushed_print("I was here - kill_timer_thread");
     let TimerControl {
         last_end_time: _,
         mutex,
@@ -219,35 +221,6 @@ fn kill_timer_thread(timer_control: &Arc<TimerControl>) -> CommandResult {
     condvar.notify_one();
     CommandResult::Continue
 }
-
-/*
-
-KILL:
-
-    YOU                        ME
-
-    s 1
-    k     => set end time
-
-
-1. successful kill
-
-                      command thread        event thread
-  Jeff  start timer      save end time +5      put => start new timer thread that stops at +5
-  Yves                                         put =>  start new timer thread that stops at +5
-  Jeff  kill timer       save a time in past   put => if time in past, kill timer thread.
-  Yves
-
-
-2. failed kill
-                      command thread        event thread
-  Jeff  start timer      save end time +5      put => start new timer thread that stops at +5
-  Yves                                         put =>  start new timer thread that stops at +5
-  Yves  start timer (at +2) => if end time in future, disallow, message "There is an existing timer that is done at XX. You must first kill it using the k command."
-
-
-
- */
 
 fn start_timer(timer_control: &Arc<TimerControl>) {
     let TimerControl {
@@ -266,10 +239,10 @@ fn start_timer(timer_control: &Arc<TimerControl>) {
             .unwrap();
         kill_timer_flag = result.0;
         if *kill_timer_flag {
-            flushed_print("timer killed");
+            flushed_print("timer completed");
             break;
         } else if result.1.timed_out() {
-            flushed_print("timer completed");
+            flushed_print("timer completed (timed out)");
             break;
         } else {
             flushed_print("what happened here??");
