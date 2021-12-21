@@ -31,11 +31,6 @@ struct Db {
     connection: Firebase,
 }
 
-fn flushed_print(line: &str) {
-    println!("{}", line);
-    io::stdout().flush().unwrap();
-}
-
 fn main() {
     match process_args() {
         Ok(_) => {
@@ -142,7 +137,6 @@ fn db_create_timer(duration_in_minutes: String, db_control: &Db) {
 
 fn db_stop_timer(db_control: &Db) {
     store_end_time(db_control, &(Utc::now().timestamp() - 1));
-    println!("End time in past stored");
 }
 
 fn store_future_time(db_control: &Db, given_time: Option<i64>, wait_minutes: u64) -> Result<i64> {
@@ -183,14 +177,10 @@ fn run_event_thread(timer_control: &Arc<TimerControl>, db_control: &Db) {
 fn handle_event(event: Event, timer_control: &Arc<TimerControl>) {
     if let Some(event_type) = event.event_type {
         if event_type.as_str() == "put" {
-            let x = format!("put; event id: {:?} >>> {:?}", event.id, event.data);
-            flushed_print(&x);
+            //let x = format!("put; event id: {:?} >>> {:?}", event.id, event.data);
+            //println!(&x);
             on_new_event(event.data, timer_control)
         }
-        /* else {
-            println!("not put; event id {:?} >>> {:?}", event.id, event.data)
-        }
-        */
     }
 }
 
@@ -198,13 +188,17 @@ fn on_new_event(json_payload: String, timer_control: &Arc<TimerControl>) {
     let node: Value = serde_json::from_str(&json_payload).unwrap();
     if let Some(end_time) = node["data"]["endTime"].as_i64() {
         let mut mut_last_end_time = timer_control.last_end_time.lock().unwrap();
+        if end_time == *mut_last_end_time {
+            // we get extra put events with the same information, so we are just going to ignore it
+            return;
+        };
         *mut_last_end_time = end_time;
+
         if end_time > Utc::now().timestamp() {
-            flushed_print("starting a timer");
+            println!("Joining a timer already in progress.");
             let timer_control_clone = timer_control.clone();
             thread::spawn(move || start_timer(&timer_control_clone));
         } else {
-            flushed_print("end time passed -- killing a timer");
             kill_timer_thread(timer_control);
         }
     }
@@ -238,14 +232,12 @@ fn start_timer(timer_control: &Arc<TimerControl>) {
             .wait_timeout(kill_timer_flag, Duration::from_secs(duration_in_seconds))
             .unwrap();
         kill_timer_flag = result.0;
-        if *kill_timer_flag {
-            flushed_print("timer completed");
+        if result.1.timed_out() {
+            println!("timer completed");
             break;
-        } else if result.1.timed_out() {
-            flushed_print("timer completed (timed out)");
+        } else if *kill_timer_flag {
+            println!("timer killed");
             break;
-        } else {
-            flushed_print("what happened here??");
         }
         // else: spurious wakeup; restart loop
     }
